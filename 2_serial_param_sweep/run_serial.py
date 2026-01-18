@@ -3,57 +3,86 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from model import State, run_simulation
+from model import run_simulation
 
 
 def parse_args():
-    """Parse command line arguments for serial parameter sweep.
+    parser = argparse.ArgumentParser()
 
-    Returns:
-        Parsed arguments containing:
-        - params: Path to CSV file with parameter combinations
-        - out_dir: Output directory for results
-        - plot: Boolean flag to generate plots after run
-        - smooth_window: Window size for smoothing timeseries (default: 1, no smoothing)
+    parser.add_argument("--params", type=Path, required=True)
+    parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--plot", action="store_true")
+    parser.add_argument("--smooth-window", type=int, default=1)
 
-    Note:
-        Use argparse.ArgumentParser to define all required and optional arguments
-    """
-    # TODO: Implement argument parsing
-    pass
+    return parser.parse_args()
+
+
+def smooth(series, window):
+    if window <= 1:
+        return series
+    return series.rolling(window, min_periods=1).mean()
 
 
 def main():
-    """Main function to run serial parameter sweep.
+    args = parse_args()
 
-    This function should:
-    1. Parse command line arguments
-    2. Read parameter combinations from CSV file
-    3. Run simulations serially for each parameter combination
-    4. Collect and aggregate results
-    5. Save aggregated results to CSV files
-    6. Optionally generate plots
+    df_params = pd.read_csv(args.params)
+    args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    Expected parameter CSV columns:
-    - init_mailly: Initial bikes at Mailly
-    - init_moulin: Initial bikes at Moulin
-    - steps: Number of simulation steps
-    - p1: Probability Mailly->Moulin
-    - p2: Probability Moulin->Mailly
-    - seed: Random seed
+    metrics_rows = []
 
-    Output files:
-    - metrics.csv: Aggregated metrics for all runs
-    - Optional plots: PNG files for timeseries and metrics visualization
+    for run_id, row in df_params.iterrows():
+        res = run_simulation(
+        initial_mailly=int(row["init_mailly"]),
+        initial_moulin=int(row["init_moulin"]),
+        steps=int(row["steps"]),
+        p1=float(row["p1"]),
+        p2=float(row["p2"]),
+        seed=int(row["seed"]),
+    )
 
-    Note:
-        - Process each row in the parameters file as a separate simulation run
-        - Add run_id to track individual simulations
-        - **OPTIONAL**: plot timeseries for both stations
-        - **OPTIONAL**: Handle smoothing for timeseries plots if requested
-    """
-    # TODO: Implement serial parameter sweep workflow
-    pass
+        metrics_rows.append({
+            "run_id": run_id,
+            "p1": row["p1"],
+            "p2": row["p2"],
+            "steps": row["steps"],
+            "init_mailly": row["init_mailly"],
+            "init_moulin": row["init_moulin"],
+            "seed": row["seed"],
+            "final_imbalance": res["final_imbalance"],
+            "total_unmet_mailly": res["total_unmet_mailly"],
+            "total_unmet_moulin": res["total_unmet_moulin"],
+        })
+
+        if args.plot:
+            df = pd.DataFrame({
+                "mailly": res["mailly"],
+                "moulin": res["moulin"],
+                "imbalance": res["imbalance"],
+            })
+
+            df = df.apply(lambda s: smooth(s, args.smooth_window))
+
+            plt.figure(figsize=(10, 6))
+            plt.plot(df["mailly"], label="Mailly")
+            plt.plot(df["moulin"], label="Moulin")
+            plt.plot(df["imbalance"], label="Imbalance")
+            plt.legend()
+            plt.title(f"Run {run_id}")
+            plt.savefig(args.out_dir / f"run_{run_id}.png")
+            plt.close()
+
+    df_metrics = pd.DataFrame(metrics_rows)
+    df_metrics.to_csv(args.out_dir / "metrics.csv", index=False)
+
+    if args.plot:
+        plt.figure(figsize=(10, 6))
+        plt.scatter(df_metrics["p1"], df_metrics["final_imbalance"], label="Final imbalance")
+        plt.xlabel("p1")
+        plt.ylabel("Final imbalance")
+        plt.title("Final imbalance vs p1")
+        plt.savefig(args.out_dir / "metrics_3plot.png")
+        plt.close()
 
 
 if __name__ == "__main__":
